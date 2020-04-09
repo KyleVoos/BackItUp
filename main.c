@@ -142,18 +142,19 @@ void traverse(file_info *finfo, char *path) {
                 strcat(filepath, d->d_name);
 
                 fprintf(stdout, "filepath = %s\n", filepath);
+                int filepath_len = strlen(filepath);
 
                 if (d->d_type != DT_LNK) {
-                    char new_path[strlen(filepath) - 1];
-                    strcpy(new_path, &filepath[2]);
+                    char new_path[filepath_len -1 ];
+                    strcpy(new_path, filepath);
                     fprintf(stdout, "new_path = %s\n", new_path);
 
-                    if (d->d_type == DT_DIR) {
+                    if (d->d_type == DT_DIR) { // Directory
                         if (finfo->backup == 1) {
                             fprintf(stdout, "d->d_name = %s\n", d->d_name);
                             struct stat nd;
-                            char backup_dir[strlen(filepath) + 9];
-                            strcpy(backup_dir, "./.backup/");
+                            char backup_dir[filepath_len + 9];
+                            strcpy(backup_dir, ".backup/");
                             strlcat(backup_dir, new_path, sizeof(backup_dir));
                             fprintf(stdout, "backup_dir = %s\n", backup_dir);
                             if (stat(backup_dir, &nd) != 0 && errno == ENOENT) {
@@ -168,11 +169,11 @@ void traverse(file_info *finfo, char *path) {
                             traverse(finfo, filepath);
                         }
                     }
-                    else if (d->d_type == DT_REG) {
+                    else if (d->d_type == DT_REG) { // Regular file
                         if (finfo->backup == 1) {
-                            char backup_path[9 + strlen(filepath) + 6];
-                            strcpy(backup_path, "./.backup/");
-                            strcat(backup_path, new_path);
+                            char backup_path[9 + filepath_len + 6];
+                            strcpy(backup_path, ".backup/");
+                            strcat(backup_path, &new_path[2]);
                             strcat(backup_path, ".bak");
                             fprintf(stdout, "destination = %s\n", backup_path);
                             finfo->f = realloc(finfo->f, (sizeof(files) * (finfo->count + 1)));
@@ -180,9 +181,9 @@ void traverse(file_info *finfo, char *path) {
                             finfo->count += 1;
                         }
                         else {
-                            char orig_path[strlen(filepath)];
+                            char orig_path[filepath_len + 2]; memset(orig_path, 0, filepath_len);
                             strcpy(orig_path, "./");
-                            strcat(orig_path, &filepath[10]);
+                            strcat(orig_path, &filepath[strlen(path) + 1]);
                             orig_path[strlen(orig_path) - 4] = '\0';
                             fprintf(stdout, "source = %s\n", orig_path);
                             finfo->f = realloc(finfo->f, (sizeof(files) * (finfo->count + 1)));
@@ -199,7 +200,7 @@ void traverse(file_info *finfo, char *path) {
 void backItUp(file_info *finfo) {
 
     if (finfo->backup == 1) {
-        if (mkdir("./.backup", 0777) == 0 || errno == EEXIST) {
+        if (mkdir(".backup", 0777) == 0 || errno == EEXIST) {
             traverse(finfo, ".");
             spawnThreads(finfo);
         } else {
@@ -207,8 +208,8 @@ void backItUp(file_info *finfo) {
             exit(1);
         }
     }
-    else {
-        traverse(finfo, "./.backup");
+    else { // Request restore
+        traverse(finfo, ".backup");
         spawnThreads(finfo);
     }
 
