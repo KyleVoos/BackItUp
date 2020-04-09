@@ -11,15 +11,17 @@
 typedef struct _files {
     int thread_id;
     ssize_t copy_size;
-    char *orig_path;
-    char *backup_path;
+    char *source;
+    char *destination;
     char *filename;
 } files;
 
 typedef struct _file_info {
     int count;
+    int num_copied;
     int backup;
     files *f;
+    ssize_t total_bytes_copied;
 } file_info;
 
 file_info *initalize(int flag) {
@@ -28,6 +30,8 @@ file_info *initalize(int flag) {
     finfo->f = (files *) malloc(sizeof(files));
     finfo->backup = flag;
     finfo->count = 0;
+    finfo->num_copied = 0;
+    finfo->total_bytes_copied = 0;
 
     return finfo;
 }
@@ -35,10 +39,11 @@ file_info *initalize(int flag) {
 files *init(char *orig, char *backup, int tid, char *filename) {
 
     files *f = (files *) malloc(sizeof(files));
-    f->orig_path = strdup(orig);
-    f->backup_path = strdup(backup);
+    f->source = strdup(orig);
+    f->destination = strdup(backup);
     f->filename = strdup(filename);
     f->thread_id = tid;
+    f->copy_size = 0;
 
     return f;
 }
@@ -71,15 +76,17 @@ ssize_t copyFile(char *source, char *dest) {
 void *checkTime(void *arg) {
 
     files *f = arg;
-    struct stat orig_file, backup_file;
+    struct stat source, dest;
 
     fprintf(stdout, "[thread %d] Backing up %s\n", f->thread_id, f->filename);
 
-    if (stat(f->orig_path, &orig_file) == 0) {
-        if (stat(f->backup_path, &backup_file) == 0) {
-            if (difftime(backup_file.st_mtime, orig_file.st_mtime) < 0) {
+    if (stat(f->source, &source) == 0) {
+        if (stat(f->destination, &dest) == 0) {
+//            fprintf(stdout, "dest.st_mtime = %d\n", (int) dest.st_mtime);
+//            fprintf(stdout, "source.st_mtime = %d\n", (int) source.st_mtime);
+            if (difftime(dest.st_mtime, source.st_mtime) < 0) {
                 fprintf(stdout, "[thread %d] WARNING: Overwriting %s\n", f->thread_id, f->filename);
-                f->copy_size = copyFile(f->orig_path, f->backup_path);
+                f->copy_size = copyFile(f->source, f->destination);
             }
             else {
                 fprintf(stdout, "[thread %d] NOTICE: %s is already the most current version\n", f->thread_id,
@@ -88,8 +95,7 @@ void *checkTime(void *arg) {
             }
         }
         else if (errno == ENOENT) {
-            fprintf(stdout, "ERROR: %s\n", strerror(errno));
-            f->copy_size = copyFile(f->orig_path, f->backup_path);
+            f->copy_size = copyFile(f->source, f->destination);
         }
         else {
             fprintf(stdout, "%s\n", strerror(errno));
@@ -97,7 +103,7 @@ void *checkTime(void *arg) {
     }
 
     if (f->copy_size > 0)
-        fprintf(stdout, "[thread %d] Copied %d bytes from %s to %s\n", f->thread_id, (int) f->copy_size, f->orig_path,f->backup_path);
+        fprintf(stdout, "[thread %d] Copied %d bytes from %s to %s\n", f->thread_id, (int) f->copy_size, f->source,f->destination);
 
     return NULL;
 }
@@ -158,16 +164,31 @@ void traverse(file_info *finfo, char *path) {
 
                             traverse(finfo, filepath);
                         }
+                        else {
+                            traverse(finfo, filepath);
+                        }
                     }
                     else if (d->d_type == DT_REG) {
-                        char backup_path[9 + strlen(filepath) + 6];
-                        strcpy(backup_path, "./.backup/");
-                        strcat(backup_path, new_path);
-                        strcat(backup_path, ".bak");
-                        fprintf(stdout, "backup_path = %s\n", backup_path);
-                        finfo->f = realloc(finfo->f, (sizeof(files) * (finfo->count + 1)));
-                        finfo->f[finfo->count] = *init(filepath, backup_path, finfo->count + 1, d->d_name);
-                        finfo->count += 1;
+                        if (finfo->backup == 1) {
+                            char backup_path[9 + strlen(filepath) + 6];
+                            strcpy(backup_path, "./.backup/");
+                            strcat(backup_path, new_path);
+                            strcat(backup_path, ".bak");
+                            fprintf(stdout, "destination = %s\n", backup_path);
+                            finfo->f = realloc(finfo->f, (sizeof(files) * (finfo->count + 1)));
+                            finfo->f[finfo->count] = *init(filepath, backup_path, finfo->count + 1, d->d_name);
+                            finfo->count += 1;
+                        }
+                        else {
+                            char orig_path[strlen(filepath)];
+                            strcpy(orig_path, "./");
+                            strcat(orig_path, &filepath[10]);
+                            orig_path[strlen(orig_path) - 4] = '\0';
+                            fprintf(stdout, "source = %s\n", orig_path);
+                            finfo->f = realloc(finfo->f, (sizeof(files) * (finfo->count + 1)));
+                            finfo->f[finfo->count] = *init(filepath, orig_path, finfo->count + 1, d->d_name);
+                            finfo->count += 1;
+                        }
                     }
                 }
             }
@@ -177,14 +198,27 @@ void traverse(file_info *finfo, char *path) {
 
 void backItUp(file_info *finfo) {
 
-    if (mkdir("./.backup", 0777) == 0 || errno == EEXIST) {
-        traverse(finfo, ".");
-        spawnThreads(finfo);
+    if (finfo->backup == 1) {
+        if (mkdir("./.backup", 0777) == 0 || errno == EEXIST) {
+            traverse(finfo, ".");
+            spawnThreads(finfo);
+        } else {
+            fprintf(stdout, "%s\n", strerror(errno));
+            exit(1);
+        }
     }
     else {
-        fprintf(stdout, "%s\n", strerror(errno));
-        exit(1);
+        traverse(finfo, "./.backup");
+        spawnThreads(finfo);
     }
+
+    for (int ii = 0; ii < finfo->count; ii++) {
+        finfo->total_bytes_copied += finfo->f[ii].copy_size;
+        if (finfo->f[ii].copy_size > 0)
+            finfo->num_copied += 1;
+    }
+
+    fprintf(stdout, "Successfully copied %d files (%d bytes)\n", finfo->num_copied, (int) finfo->total_bytes_copied);
 
 }
 
@@ -196,7 +230,8 @@ int main(int argc, char *argv[]) {
     }
     else if (argc == 2) {
         if (strcmp(argv[1], "-r") == 0) {
-
+            file_info *finfo = initalize(0);
+            backItUp(finfo);
         }
         else
             fprintf(stdout, "Invalid input, use: %s -r\n", argv[0]);
