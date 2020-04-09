@@ -103,7 +103,7 @@ void *checkTime(void *arg) {
     }
 
     if (f->copy_size > 0)
-        fprintf(stdout, "[thread %d] Copied %d bytes from %s to %s\n", f->thread_id, (int) f->copy_size, f->source,f->destination);
+        fprintf(stdout, "[thread %d] Copied %d bytes from %s to %s\n", f->thread_id, (int) f->copy_size, f->source,f->filename);
 
     return NULL;
 }
@@ -141,13 +141,13 @@ void traverse(file_info *finfo, char *path) {
                 strcat(filepath, "/");
                 strcat(filepath, d->d_name);
 
-                fprintf(stdout, "filepath = %s\n", filepath);
+                // fprintf(stdout, "filepath = %s\n", filepath);
                 int filepath_len = strlen(filepath);
 
                 if (d->d_type != DT_LNK) {
                     char new_path[filepath_len -1 ];
                     strcpy(new_path, filepath);
-                    fprintf(stdout, "new_path = %s\n", new_path);
+                    // fprintf(stdout, "new_path = %s\n", new_path);
 
                     if (d->d_type == DT_DIR) { // Directory
                         if (finfo->backup == 1) {
@@ -172,12 +172,14 @@ void traverse(file_info *finfo, char *path) {
                     else if (d->d_type == DT_REG) { // Regular file
                         if (finfo->backup == 1) {
                             char backup_path[9 + filepath_len + 6];
+                            char new_name[strlen(d->d_name) + 4]; 
+                            strcpy(new_name, d->d_name);
+                            strcat(new_name, ".bak");
                             strcpy(backup_path, ".backup/");
-                            strcat(backup_path, &new_path[2]);
-                            strcat(backup_path, ".bak");
-                            fprintf(stdout, "destination = %s\n", backup_path);
+                            strcat(backup_path, new_name);
+                            // fprintf(stdout, "destination = %s\n", backup_path);
                             finfo->f = realloc(finfo->f, (sizeof(files) * (finfo->count + 1)));
-                            finfo->f[finfo->count] = *init(filepath, backup_path, finfo->count + 1, d->d_name);
+                            finfo->f[finfo->count] = *init(filepath, backup_path, finfo->count + 1, new_name);
                             finfo->count += 1;
                         }
                         else {
@@ -185,8 +187,9 @@ void traverse(file_info *finfo, char *path) {
                             strcpy(orig_path, "./");
                             strcat(orig_path, &filepath[strlen(path) + 1]);
                             orig_path[strlen(orig_path) - 4] = '\0';
-                            fprintf(stdout, "source = %s\n", orig_path);
+                            // fprintf(stdout, "source = %s\n", orig_path);
                             finfo->f = realloc(finfo->f, (sizeof(files) * (finfo->count + 1)));
+                            d->d_name[strlen(d->d_name)-4] = 0;
                             finfo->f[finfo->count] = *init(filepath, orig_path, finfo->count + 1, d->d_name);
                             finfo->count += 1;
                         }
