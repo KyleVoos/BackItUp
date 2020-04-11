@@ -13,7 +13,8 @@ typedef struct _files {
     ssize_t copy_size;
     char *source;
     char *destination;
-    char *filename;
+    char *source_filename;
+    char *dest_filename;
 } files;
 
 typedef struct _file_info {
@@ -36,12 +37,13 @@ file_info *initalize(int flag) {
     return finfo;
 }
 
-files *init(char *orig, char *backup, int tid, char *filename) {
+files *init(char *orig, char *backup, int tid, char *source_filename, char *dest_filename) {
 
     files *f = (files *) malloc(sizeof(files));
     f->source = strdup(orig);
     f->destination = strdup(backup);
-    f->filename = strdup(filename);
+    f->source_filename = strdup(source_filename);
+    f->dest_filename = strdup(dest_filename);
     f->thread_id = tid;
     f->copy_size = 0;
 
@@ -50,25 +52,34 @@ files *init(char *orig, char *backup, int tid, char *filename) {
 
 ssize_t copyFile(char *source, char *dest) {
 
-    ssize_t write_size, read_size;
+    ssize_t read_size;
     ssize_t total = 0;
     int sfd, dfd;
     char buffer[100] = {0};
 
-//    fprintf(stdout, "source = %s\n", source);
-//    fprintf(stdout, "dest = %s\n", dest);
+    fprintf(stdout, "source = %s\n", source);
+    fprintf(stdout, "dest = %s\n", dest);
 
     if ((sfd = open(source, O_RDONLY)) > 0) {
-        if ((dfd = open(dest, O_WRONLY | O_CREAT)) > 0) {
+        if ((dfd = open(dest, O_WRONLY | O_CREAT | O_TRUNC, 0777)) > 0) {
             while ((read_size = read(sfd, buffer, 100)) > 0) {
-                if ((write_size = write(dfd, buffer, read_size)) == read_size) {
+                if (write(dfd, buffer, (size_t) read_size) == read_size) {
                     total += read_size;
                 }
-                else
-                    fprintf(stdout, "%s\n", strerror(errno));
             }
         }
+        else
+            fprintf(stdout, "%s\n", strerror(errno));
+
+        if (close(dfd))
+            fprintf(stdout, "%s\n", strerror(errno));
     }
+    else
+        fprintf(stdout, "%s\n", strerror(errno));
+
+    if (close(sfd) < 0)
+        fprintf(stdout, "%s\n", strerror(errno));
+
 
     return total;
 }
@@ -78,19 +89,17 @@ void *checkTime(void *arg) {
     files *f = arg;
     struct stat source, dest;
 
-    fprintf(stdout, "[thread %d] Backing up %s\n", f->thread_id, f->filename);
+    fprintf(stdout, "[thread %d] Backing up %s\n", f->thread_id, f->source_filename);
 
     if (stat(f->source, &source) == 0) {
         if (stat(f->destination, &dest) == 0) {
-//            fprintf(stdout, "dest.st_mtime = %d\n", (int) dest.st_mtime);
-//            fprintf(stdout, "source.st_mtime = %d\n", (int) source.st_mtime);
             if (difftime(dest.st_mtime, source.st_mtime) < 0) {
-                fprintf(stdout, "[thread %d] WARNING: Overwriting %s\n", f->thread_id, f->filename);
+                fprintf(stdout, "[thread %d] WARNING: Overwriting %s\n", f->thread_id, f->source_filename);
                 f->copy_size = copyFile(f->source, f->destination);
             }
             else {
                 fprintf(stdout, "[thread %d] NOTICE: %s is already the most current version\n", f->thread_id,
-                        f->filename);
+                        f->source_filename);
                 return NULL;
             }
         }
@@ -103,7 +112,8 @@ void *checkTime(void *arg) {
     }
 
     if (f->copy_size > 0)
-        fprintf(stdout, "[thread %d] Copied %d bytes from %s to %s\n", f->thread_id, (int) f->copy_size, f->source,f->filename);
+        fprintf(stdout, "[thread %d] Copied %d bytes from %s to %s\n", f->thread_id, (int) f->copy_size,
+                f->source_filename,f->dest_filename);
 
     return NULL;
 }
@@ -126,6 +136,17 @@ void spawnThreads(file_info *finfo) {
 
 }
 
+void createDir(char *path) {
+
+    struct stat nd;
+
+    if (stat(path, &nd) != 0 && errno == ENOENT) {
+        fprintf(stdout, "Directory %s does not exist.\n", path);
+        mkdir(path, 0777);
+    } else
+        fprintf(stdout, "DIRECTORY %s already exists\n", path);
+}
+
 void traverse(file_info *finfo, char *path) {
 
     DIR *dir;
@@ -141,64 +162,73 @@ void traverse(file_info *finfo, char *path) {
                 strcat(filepath, "/");
                 strcat(filepath, d->d_name);
 
-                // fprintf(stdout, "filepath = %s\n", filepath);
-                int filepath_len = strlen(filepath);
+                fprintf(stdout, "filepath = %s\n", filepath);
+                size_t filepath_len = strlen(filepath);
 
                 if (d->d_type != DT_LNK) {
-                    char new_path[filepath_len -1 ];
-                    strcpy(new_path, filepath);
-                    // fprintf(stdout, "new_path = %s\n", new_path);
+                    char new_path[filepath_len -1];
+                    strcpy(new_path, &filepath[2]);
+                    fprintf(stdout, "new_path = %s\n", new_path);
 
                     if (d->d_type == DT_DIR) { // Directory
                         if (finfo->backup == 1) {
                             fprintf(stdout, "d->d_name = %s\n", d->d_name);
-                            struct stat nd;
                             char backup_dir[filepath_len + 9];
                             strcpy(backup_dir, ".backup/");
                             strlcat(backup_dir, new_path, sizeof(backup_dir));
                             fprintf(stdout, "backup_dir = %s\n", backup_dir);
-                            if (stat(backup_dir, &nd) != 0 && errno == ENOENT) {
-                                fprintf(stdout, "Directory %s does not exist.\n", backup_dir);
-                                mkdir(backup_dir, 0777);
-                            } else
-                                fprintf(stdout, "DIRECTORY %s already exists\n", backup_dir);
-
+                            createDir(backup_dir);
                             traverse(finfo, filepath);
                         }
                         else {
+                            char restore_dir[filepath_len - 5];
+                            strcpy(restore_dir, "./");
+                            strlcat(restore_dir, &filepath[8], sizeof(restore_dir));
+                            fprintf(stdout, "restore_dir = %s\n", restore_dir);
+                            createDir(restore_dir);
                             traverse(finfo, filepath);
                         }
                     }
                     else if (d->d_type == DT_REG) { // Regular file
                         if (finfo->backup == 1) {
-                            char backup_path[9 + filepath_len + 6];
-                            char new_name[strlen(d->d_name) + 4]; 
-                            strcpy(new_name, d->d_name);
-                            strcat(new_name, ".bak");
-                            strcpy(backup_path, ".backup/");
-                            strcat(backup_path, new_name);
-                            // fprintf(stdout, "destination = %s\n", backup_path);
+                            char backup_path[9 + strlen(filepath) + 6];
+                            char new_fname[strlen(d->d_name) + 5];
+                            strcpy(new_fname, d->d_name);
+                            strlcat(new_fname, ".bak", sizeof(new_fname));
+                            fprintf(stdout, "d->d_name = %s\n", d->d_name);
+                            fprintf(stdout, "new_fname = %s\n", new_fname);
+                            strcpy(backup_path, "./.backup/");
+                            strcat(backup_path, new_path);
+                            strcat(backup_path, ".bak");
+                            fprintf(stdout, "destination = %s\n", backup_path);
                             finfo->f = realloc(finfo->f, (sizeof(files) * (finfo->count + 1)));
-                            finfo->f[finfo->count] = *init(filepath, backup_path, finfo->count + 1, new_name);
+                            finfo->f[finfo->count] = *init(filepath, backup_path, finfo->count + 1, d->d_name, new_fname);
                             finfo->count += 1;
                         }
                         else {
                             char orig_path[filepath_len + 2]; memset(orig_path, 0, filepath_len);
+                            char *orig_name = strdup(d->d_name);
+                            orig_name[strlen(orig_name) - 4] = '\0';
+                            fprintf(stdout, "orig_name = %s\n", orig_name);
                             strcpy(orig_path, "./");
-                            strcat(orig_path, &filepath[strlen(path) + 1]);
+                            strcat(orig_path, &filepath[8]);
                             orig_path[strlen(orig_path) - 4] = '\0';
-                            // fprintf(stdout, "source = %s\n", orig_path);
+                            fprintf(stdout, "source = %s\n", orig_path);
                             finfo->f = realloc(finfo->f, (sizeof(files) * (finfo->count + 1)));
                             d->d_name[strlen(d->d_name)-4] = 0;
-                            finfo->f[finfo->count] = *init(filepath, orig_path, finfo->count + 1, d->d_name);
+                            finfo->f[finfo->count] = *init(filepath, orig_path, finfo->count + 1, d->d_name, orig_name);
                             finfo->count += 1;
+                            free(orig_name);
                         }
                     }
                 }
             }
         }
+        closedir(dir);
     }
 }
+
+
 
 void backItUp(file_info *finfo) {
 
@@ -219,7 +249,7 @@ void backItUp(file_info *finfo) {
     for (int ii = 0; ii < finfo->count; ii++) {
         finfo->total_bytes_copied += finfo->f[ii].copy_size;
         if (finfo->f[ii].copy_size > 0)
-            finfo->num_copied += 1;
+            finfo->num_copied++;
     }
 
     fprintf(stdout, "Successfully copied %d files (%d bytes)\n", finfo->num_copied, (int) finfo->total_bytes_copied);
