@@ -1,5 +1,5 @@
 all: main.c
-	gcc -o BackItUp main.c -lbsd -pthread
+	gcc -o BackItUp main.c -pthread -Wall -Werror
 
 test: main.c
 	make all
